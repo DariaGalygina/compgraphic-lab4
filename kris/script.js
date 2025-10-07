@@ -83,6 +83,29 @@ class Polygon {
         const center = this.getCenter();
         this.rotateAroundPoint(center.x, center.y, angleDeg);
     }
+
+    // Блок с масштабированием
+    scaleAroundPoint(cx, cy, scaleFactor) {
+        const s = scaleFactor;
+        const scaleMatrix = [
+            [s, 0, cx - cx * s],
+            [0, s, cy - cy * s]
+        ];
+        this.applyTransformation(scaleMatrix);
+    }
+    
+    scaleAroundCenter(factor) {
+        const center = this.getCenter();
+    
+        for (let i = 0; i < this.vertices.length; i++) {
+            const dx = this.vertices[i].x - center.x;
+            const dy = this.vertices[i].y - center.y;
+            this.vertices[i].x = center.x + dx * factor;
+            this.vertices[i].y = center.y + dy * factor;
+        }
+    }
+    
+    
     
     draw(ctx, highlight = false, edgeCheck = null, selected = false) {
         if (this.vertices.length === 0) return;
@@ -186,6 +209,9 @@ class PolygonApp {
         this.tempEdgeStart = null; // если пользователь рисует временное ребро мышью
         this.tempEdgeEnd = null;
         this.intersectionPoint = null; // {x,y} если есть
+
+        this.scalePointMode = false;  
+        this.scaleCenterMode = false;
         
         this.resizeCanvas();
         this.setupEvents();
@@ -205,6 +231,12 @@ class PolygonApp {
             this.draw();
         });
         
+        this.canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            console.log("Wheel event!", e.deltaY);
+        });
+        
+
         this.canvas.addEventListener('click', (e) => this.handleClick(e));
         this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
         // кнопки
@@ -217,6 +249,24 @@ class PolygonApp {
         document.getElementById('translate-polygon').addEventListener('click', () => this.translatePolygon());
         document.getElementById('rotate-polygon').addEventListener('click', () => this.rotatePolygon());
         document.getElementById('rotate-polygon-center').addEventListener('click', () => this.rotatePolygonAroundCenter());
+
+        const sp = document.getElementById('scale-point-mode');
+        if (sp) sp.addEventListener('click', () => this.toggleScalePointMode());
+
+        const sc = document.getElementById('scale-center-mode');
+        if (sc) sc.addEventListener('click', () => this.toggleScaleCenterMode());
+        this.canvas.addEventListener('wheel', (e) => this.handleWheelScale(e), { passive: false });
+
+    }
+
+    toggleScalePointMode() {
+        this.scalePointMode = !this.scalePointMode;
+        this.checkMode = false;
+        this.edgeCheckMode = false;
+        this.edgeIntersectMode = false;
+        this.selectMode = false;
+        this.updateUI();
+        this.draw();
     }
     
     getMousePos(e) {
@@ -251,6 +301,15 @@ class PolygonApp {
         } else if (this.edgeIntersectMode) {
             // Логика выбора/рисования рёбер для пересечения
             this.handleEdgeIntersectClick(pos);
+        } else if (this.scalePointMode) {
+            const polygon = this.getSelectedPolygon();
+            if (!polygon) { alert('Сначала выберите полигон!'); return; }
+            const scaleFactor = parseFloat(document.getElementById('scale-factor').value) || 1.2;
+            polygon.scaleAroundPoint(pos.x, pos.y, scaleFactor);
+            this.scalePointMode = false; // выключаем режим после применения (можно изменить)
+            this.updateUI();
+            this.draw();
+            return;
         } else {
             if (this.currentPolygon) {
                 this.currentPolygon.vertices.push(pos);
@@ -259,6 +318,51 @@ class PolygonApp {
         this.updateUI();
         this.draw();
     }
+
+    toggleScalePointMode() {
+        this.scalePointMode = !this.scalePointMode;
+        if (this.scalePointMode) {
+            // выключаем другие режимы
+            this.scaleCenterMode = false;
+            this.selectMode = this.checkMode = this.edgeCheckMode = this.edgeIntersectMode = false;
+        }
+        this.updateUI();
+        this.draw();
+    }
+    
+    toggleScaleCenterMode() {
+        this.scaleCenterMode = !this.scaleCenterMode;
+        if (this.scaleCenterMode) {
+            // выключаем другие режимы
+            this.scalePointMode = false;
+            this.selectMode = this.checkMode = this.edgeCheckMode = this.edgeIntersectMode = false;
+        }
+        this.updateUI();
+        this.draw();
+    }
+    
+    handleWheelScale(e) {
+        if (!this.scalePointMode && !this.scaleCenterMode) return; // ← проверка режима
+    
+        e.preventDefault();
+    
+        const polygon = this.getSelectedPolygon();
+        if (!polygon) {
+            console.log("Сначала выберите полигон!");
+            return;
+        }
+    
+        const scaleFactor = 1.2; // фиксированный коэффициент
+        const direction = e.deltaY < 0 ? scaleFactor : 1 / scaleFactor;
+    
+        const pos = this.getMousePos(e);
+        polygon.scaleAroundPoint(pos.x, pos.y, direction);
+    
+        this.updateUI();
+        this.draw();
+    }
+    
+    
     
     handleMouseMove(e) {
         const pos = this.getMousePos(e);
@@ -345,8 +449,6 @@ class PolygonApp {
             }
         }
     }
-    
-    
     
     findNearestEdge(pos, maxDist = 10) {
         let minDistance = Infinity;
@@ -587,6 +689,53 @@ class PolygonApp {
             infoElement.style.color = '#333';
         }
     }
+
+    // Вставь в класс PolygonApp — реализует выбор полигона по клику
+    selectPolygonAtPoint(pos) {
+        const EPS = 8; // пиксели допустимого попадания по вершине/ребру
+        let found = null;
+        // проверяем полигоны в обратном порядке (последние нарисованные — сверху)
+        for (let k = this.polygons.length - 1; k >= 0; k--) {
+            const polygon = this.polygons[k];
+            // 1) если замкнут и содержит точку
+            if (polygon.completed && polygon.vertices.length >= 3 && polygon.containsPoint(pos.x, pos.y)) { found = polygon; break; }
+            // 2) вершины
+            for (let v of polygon.vertices) { if (Math.hypot(pos.x - v.x, pos.y - v.y) <= EPS) { found = polygon; break; } }
+            if (found) break;
+            // 3) ребра
+            for (let i = 0; i < polygon.vertices.length; i++) {
+                const a = polygon.vertices[i];
+                const b = polygon.vertices[(i+1) % polygon.vertices.length];
+                const dist = this.pointToSegmentDistance(pos, a, b);
+                if (dist <= EPS) { found = polygon; break; }
+            }
+            if (found) break;
+        }
+
+        // если не найден — можно также проверить незавершённый текущий полигон (по вершинам)
+        if (!found && this.currentPolygon) {
+            for (let v of this.currentPolygon.vertices) {
+                if (Math.hypot(pos.x - v.x, pos.y - v.y) <= EPS) { found = this.currentPolygon; break; }
+            }
+        }
+
+        if (found) this.selectedPolygonId = found.id;
+        else this.selectedPolygonId = -1;
+
+        this.updateSelectionInfo();
+        this.draw();
+    }
+
+    // расстояние от точки до отрезка (вспомогательная)
+    pointToSegmentDistance(p, v, w) {
+        const l2 = (v.x - w.x)*(v.x - w.x) + (v.y - w.y)*(v.y - w.y);
+        if (l2 === 0) return Math.hypot(p.x - v.x, p.y - v.y);
+        let t = ((p.x - v.x)*(w.x - v.x) + (p.y - v.y)*(w.y - v.y)) / l2;
+        t = Math.max(0, Math.min(1, t));
+        const proj = { x: v.x + t * (w.x - v.x), y: v.y + t * (w.y - v.y) };
+        return Math.hypot(p.x - proj.x, p.y - proj.y);
+    }
+
     
     draw() {
         this.ctx.fillStyle = 'white';
@@ -690,6 +839,13 @@ class PolygonApp {
         selectBtn && (selectBtn.style.color = this.selectMode ? 'white' : '#4ECDC4');
         intersectBtn && (intersectBtn.style.background = this.edgeIntersectMode ? '#6A5ACD' : 'transparent');
         intersectBtn && (intersectBtn.style.color = this.edgeIntersectMode ? 'white' : '#6A5ACD');
+
+        const spBtn = document.getElementById('scale-point-mode');
+        if (spBtn) { spBtn.style.background = this.scalePointMode ? '#FF8C00' : 'transparent'; spBtn.style.color = this.scalePointMode ? 'white' : '#FF8C00'; }
+        const scBtn = document.getElementById('scale-center-mode');
+        if (scBtn) { scBtn.style.background = this.scaleCenterMode ? '#FF8C00' : 'transparent'; scBtn.style.color = this.scaleCenterMode ? 'white' : '#FF8C00'; }
+
+
     }
 }
 
