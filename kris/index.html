@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Время строить полигоны</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Время строить полигоны</h1>
+        
+        <div class="controls">
+            <button id="newPolygon">Новый полигон</button>
+            <button id="clearAll">Очистить всё</button>
+            <button id="completePolygon">Завершить полигон</button>
+            <button id="deleteLast">Удалить точку</button>
+            <button id="checkPoint">Проверить точку</button>
+            <button id="checkEdge">Проверить ребро</button>
+            <button id="selectPolygon">Выбрать полигон</button>
+        </div>
+        
+        <div class="transform-controls">
+            <div class="row">
+                <div class="column align-left">
+                    <button id="translate-polygon">Смещение</button>
+                </div>
+                <div class="column align-right">
+                    <label>По X: <input id="dx" type="number" value="0"></label>
+                    <label>По Y: <input id="dy" type="number" value="0"></label>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="column align-left">
+                    <button id="rotate-polygon">Поворот</button>
+                </div>
+                <div class="column align-right">
+                    <label>Точка поворота X: <input id="cx" type="number" value="0"></label>
+                    <label>Точка поворота Y: <input id="cy" type="number" value="0"></label>
+                    <label>Угол (в градусах): <input id="angle" type="number" value="0"></label>
+                </div>  
+            </div>
+
+            <div class="row">
+                <div class="column align-left">
+                    <button id="rotate-polygon-center">Поворот относительно центра полигона</button>
+                </div>
+                <div class="column align-right">
+                    <label>Угол (в градусах): <input id="angle-center" type="number" value="0"></label>
+                </div>
+            </div>
+        </div>
+
+        <div class="selection-info">
+            <span id="selectedPolygonInfo">Выбранный полигон: нет</span>
+        </div>
+        
+        <div class="canvas-container">
+            <canvas id="mainCanvas"></canvas>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
