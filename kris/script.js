@@ -172,12 +172,20 @@ class PolygonApp {
         this.currentPolygon = null;
         this.checkMode = false;
         this.edgeCheckMode = false;
+        this.edgeIntersectMode = false; // новый режим
         this.selectMode = false;
         this.testPoint = null;
         this.highlightedPolygons = [];
         this.edgeCheckData = null;
         this.selectedPolygonId = -1;
         this.polygonCounter = 1;
+
+        // Для пересечения ребер:
+        this.firstEdge = null; 
+        this.secondEdge = null; 
+        this.tempEdgeStart = null; // если пользователь рисует временное ребро мышью
+        this.tempEdgeEnd = null;
+        this.intersectionPoint = null; // {x,y} если есть
         
         this.resizeCanvas();
         this.setupEvents();
@@ -198,10 +206,12 @@ class PolygonApp {
         });
         
         this.canvas.addEventListener('click', (e) => this.handleClick(e));
-        
-        const buttons = ['newPolygon', 'clearAll', 'completePolygon', 'deleteLast', 'checkPoint', 'checkEdge', 'selectPolygon'];
+        this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+        // кнопки
+        const buttons = ['newPolygon', 'clearAll', 'completePolygon', 'deleteLast', 'checkPoint', 'checkEdge', 'selectPolygon', 'edgeIntersect'];
         buttons.forEach(id => {
-            document.getElementById(id).addEventListener('click', () => this[id]());
+            const el = document.getElementById(id);
+            if (el) el.addEventListener('click', () => this[id]());
         });
         
         document.getElementById('translate-polygon').addEventListener('click', () => this.translatePolygon());
@@ -227,11 +237,20 @@ class PolygonApp {
                 p.completed && p.vertices.length >= 3 && p.containsPoint(pos.x, pos.y)
             );
             this.edgeCheckData = null;
+            // сбрасываем пересечение
+            this.firstEdge = this.secondEdge = this.tempEdgeStart = this.tempEdgeEnd = this.intersectionPoint = null;
         } else if (this.edgeCheckMode) {
             this.testPoint = pos;
             this.checkEdgeForPoint();
+            // сбрасываем пересечение
+            this.firstEdge = this.secondEdge = this.tempEdgeStart = this.tempEdgeEnd = this.intersectionPoint = null;
         } else if (this.selectMode) {
             this.selectPolygonAtPoint(pos);
+            // сбрасываем пересечение
+            this.firstEdge = this.secondEdge = this.tempEdgeStart = this.tempEdgeEnd = this.intersectionPoint = null;
+        } else if (this.edgeIntersectMode) {
+            // Логика выбора/рисования рёбер для пересечения
+            this.handleEdgeIntersectClick(pos);
         } else {
             if (this.currentPolygon) {
                 this.currentPolygon.vertices.push(pos);
@@ -241,28 +260,95 @@ class PolygonApp {
         this.draw();
     }
     
-    selectPolygonAtPoint(pos) {
-       
-        for (let i = this.polygons.length - 1; i >= 0; i--) {
-            const polygon = this.polygons[i];
-            if (polygon.completed && polygon.vertices.length >= 3 && polygon.containsPoint(pos.x, pos.y)) {
-                this.selectedPolygonId = polygon.id;
-                this.updateSelectionInfo();
+    handleMouseMove(e) {
+        const pos = this.getMousePos(e);
+        if (this.edgeIntersectMode) {
+            // Если пользователь рисует временное ребро — обновляем temp end и пересечение
+            if (this.tempEdgeStart && !this.secondEdge) {
+                this.tempEdgeEnd = pos;
+                this.intersectionPoint = this.computeIntersectionBetweenEdges(
+                    this.firstEdge ? { start: this.firstEdge.start, end: this.firstEdge.end } : null,
+                    { start: this.tempEdgeStart, end: this.tempEdgeEnd }
+                );
+                this.draw();
+            } else if (this.firstEdge && !this.secondEdge && !this.tempEdgeStart) {
+                // подсвечиваем ближайшее ребро под курсором (визуально) — поиск "второго" ребра динамически
+                // но не меняем состояние; для простоты — при движении мы не выбираем автоматически
+            }
+        }
+    }
+    
+    handleEdgeIntersectClick(pos) {
+        const EDGE_PICK_EPS = 10;
+    
+        // Если ещё нет выбранного первого ребра
+        if (!this.firstEdge) {
+            const picked = this.findNearestEdge(pos, EDGE_PICK_EPS);
+            if (picked) {
+                // Выбрали существующее ребро как первое
+                this.firstEdge = picked;
+                this.intersectionPoint = null;
+                return;
+            }
+    
+            // Клик вне ребра:
+            // Если временного старта ещё нет — начинаем рисовать временное ребро
+            if (!this.tempEdgeStart) {
+                this.tempEdgeStart = pos;
+                // Инициализируем tempEdgeEnd, чтобы линия сразу рисовалась (и mousemove могла обновлять её)
+                this.tempEdgeEnd = pos;
+                this.intersectionPoint = null;
+                return;
+            }
+    
+            // Если tempEdgeStart уже был — второй клик завершает временное ребро
+            if (this.tempEdgeStart) {
+                this.tempEdgeEnd = pos;
+                // Превращаем временное ребро в "первое ребро"
+                this.firstEdge = { polygon: null, edgeIndex: null, start: this.tempEdgeStart, end: this.tempEdgeEnd };
+                // Сбрасываем временные координаты (оставляем firstEdge для дальнейших действий)
+                this.tempEdgeStart = null;
+                this.tempEdgeEnd = null;
+                this.intersectionPoint = null;
                 return;
             }
         }
-        
-        if (this.currentPolygon && this.currentPolygon.vertices.length >= 3 && this.currentPolygon.containsPoint(pos.x, pos.y)) {
-            this.selectedPolygonId = this.currentPolygon.id;
-        } else {
-            this.selectedPolygonId = -1;
+    
+        // Если уже есть firstEdge — теперь выбираем/рисуем второе ребро
+        if (this.firstEdge) {
+            const pickedSecond = this.findNearestEdge(pos, EDGE_PICK_EPS);
+            if (pickedSecond) {
+                // Второе — существующее ребро
+                this.secondEdge = pickedSecond;
+                this.intersectionPoint = this.computeIntersectionBetweenEdges(
+                    { start: this.firstEdge.start, end: this.firstEdge.end },
+                    { start: this.secondEdge.start, end: this.secondEdge.end }
+                );
+                return;
+            }
+    
+            // Клик вне ребра: начинаем/завершаем временное второе ребро
+            if (!this.tempEdgeStart) {
+                this.tempEdgeStart = pos;
+                this.tempEdgeEnd = pos;
+                return;
+            } else {
+                this.tempEdgeEnd = pos;
+                this.secondEdge = { polygon: null, edgeIndex: null, start: this.tempEdgeStart, end: this.tempEdgeEnd };
+                this.intersectionPoint = this.computeIntersectionBetweenEdges(
+                    { start: this.firstEdge.start, end: this.firstEdge.end },
+                    { start: this.secondEdge.start, end: this.secondEdge.end }
+                );
+                this.tempEdgeStart = null;
+                this.tempEdgeEnd = null;
+                return;
+            }
         }
-        this.updateSelectionInfo();
     }
     
-    checkEdgeForPoint() {
-        if (!this.testPoint) return;
-        
+    
+    
+    findNearestEdge(pos, maxDist = 10) {
         let minDistance = Infinity;
         let closestEdge = null;
         
@@ -276,21 +362,53 @@ class PolygonApp {
                 
                 const dx = end.x - start.x;
                 const dy = end.y - start.y;
-                const t = ((this.testPoint.x - start.x) * dx + (this.testPoint.y - start.y) * dy) / (dx * dx + dy * dy);
+                const denom = dx * dx + dy * dy;
+                const t = denom === 0 ? 0 : ((pos.x - start.x) * dx + (pos.y - start.y) * dy) / denom;
                 const closest = t < 0 ? start : t > 1 ? end : {
                     x: start.x + t * dx,
                     y: start.y + t * dy
                 };
-                const distance = Math.hypot(this.testPoint.x - closest.x, this.testPoint.y - closest.y);
+                const distance = Math.hypot(pos.x - closest.x, pos.y - closest.y);
                 
-                if (distance < minDistance) {
+                if (distance < minDistance && distance <= maxDist) {
                     minDistance = distance;
-                    closestEdge = { polygon, edgeIndex: i, point: this.testPoint };
+                    closestEdge = { polygon, edgeIndex: i, start: start, end: end };
                 }
             }
         }
         
-        this.edgeCheckData = closestEdge;
+        return closestEdge;
+    }
+    
+    computeIntersectionBetweenEdges(e1, e2) {
+        // e1 и/или e2 могут быть null (ничего не вычисляем)
+        if (!e1 || !e2) return null;
+        const x1 = e1.start.x, y1 = e1.start.y;
+        const x2 = e1.end.x,   y2 = e1.end.y;
+        const x3 = e2.start.x, y3 = e2.start.y;
+        const x4 = e2.end.x,   y4 = e2.end.y;
+        
+        // пересечение отрезков
+        const denom = (y4 - y3)*(x2 - x1) - (x4 - x3)*(y2 - y1);
+
+        if (Math.abs(denom) < 1e-9) {
+            // параллельны или почти
+            return null;
+        }
+
+        // вычисляем параметр t
+        const ua = ((x4 - x3)*(y1 - y3) - (y4 - y3)*(x1 - x3)) / denom; 
+        const ub = ((x2 - x1)*(y1 - y3) - (y2 - y1)*(x1 - x3)) / denom;
+
+        // ua и ub — параметры на отрезках: 0..1 — пересечение внутри отрезков
+        if (ua < 0 || ua > 1 || ub < 0 || ub > 1) {
+            return null;
+        }
+
+        const ix = x1 + ua * (x2 - x1); // P(t) = a + t(b-a)
+        const iy = y1 + ua * (y2 - y1);
+
+        return { x: ix, y: iy };
     }
     
     newPolygon() {
@@ -333,12 +451,14 @@ class PolygonApp {
         this.currentPolygon = null;
         this.checkMode = false;
         this.edgeCheckMode = false;
+        this.edgeIntersectMode = false;
         this.selectMode = false;
         this.testPoint = null;
         this.highlightedPolygons = [];
         this.edgeCheckData = null;
         this.selectedPolygonId = -1;
         this.polygonCounter = 1;
+        this.firstEdge = this.secondEdge = this.tempEdgeStart = this.tempEdgeEnd = this.intersectionPoint = null;
         this.updateSelectionInfo();
         this.updateUI();
         this.draw();
@@ -347,10 +467,12 @@ class PolygonApp {
     checkPoint() {
         this.checkMode = !this.checkMode;
         this.edgeCheckMode = false;
+        this.edgeIntersectMode = false;
         this.selectMode = false;
         this.testPoint = null;
         this.highlightedPolygons = [];
         this.edgeCheckData = null;
+        this.firstEdge = this.secondEdge = this.tempEdgeStart = this.tempEdgeEnd = this.intersectionPoint = null;
         this.updateUI();
         this.draw();
     }
@@ -358,10 +480,27 @@ class PolygonApp {
     checkEdge() {
         this.edgeCheckMode = !this.edgeCheckMode;
         this.checkMode = false;
+        this.edgeIntersectMode = false;
         this.selectMode = false;
         this.testPoint = null;
         this.highlightedPolygons = [];
         this.edgeCheckData = null;
+        this.firstEdge = this.secondEdge = this.tempEdgeStart = this.tempEdgeEnd = this.intersectionPoint = null;
+        this.updateUI();
+        this.draw();
+    }
+    
+    edgeIntersect() {
+        this.edgeIntersectMode = !this.edgeIntersectMode;
+        // выключаем другие режимы
+        if (this.edgeIntersectMode) {
+            this.checkMode = false;
+            this.edgeCheckMode = false;
+            this.selectMode = false;
+        } else {
+            // при выходе из режима — сброс
+            this.firstEdge = this.secondEdge = this.tempEdgeStart = this.tempEdgeEnd = this.intersectionPoint = null;
+        }
         this.updateUI();
         this.draw();
     }
@@ -370,9 +509,11 @@ class PolygonApp {
         this.selectMode = !this.selectMode;
         this.checkMode = false;
         this.edgeCheckMode = false;
+        this.edgeIntersectMode = false;
         this.testPoint = null;
         this.highlightedPolygons = [];
         this.edgeCheckData = null;
+        this.firstEdge = this.secondEdge = this.tempEdgeStart = this.tempEdgeEnd = this.intersectionPoint = null;
         this.updateUI();
         this.draw();
     }
@@ -462,6 +603,60 @@ class PolygonApp {
             this.currentPolygon.draw(this.ctx, false, null, isSelected);
         }
         
+        // Рисуем выбор/временные элементы для режима пересечения рёбер
+        if (this.edgeIntersectMode) {
+            // подсказка
+            this.ctx.fillStyle = '#333';
+            this.ctx.font = '14px Arial';
+            this.ctx.fillText('Режим пересечения рёбер: клик — выбрать/нарисовать ребро (1-е), затем клик — 2-е ребро', 10, 20);
+            
+            // Первое ребро
+            if (this.firstEdge) {
+                this.ctx.strokeStyle = '#FF8C00';
+                this.ctx.lineWidth = 4;
+                this.ctx.beginPath();
+                this.ctx.moveTo(this.firstEdge.start.x, this.firstEdge.start.y);
+                this.ctx.lineTo(this.firstEdge.end.x, this.firstEdge.end.y);
+                this.ctx.stroke();
+            }
+            
+            // Второе ребро (если выбрано существующее)
+            if (this.secondEdge) {
+                this.ctx.strokeStyle = '#00CED1';
+                this.ctx.lineWidth = 4;
+                this.ctx.beginPath();
+                this.ctx.moveTo(this.secondEdge.start.x, this.secondEdge.start.y);
+                this.ctx.lineTo(this.secondEdge.end.x, this.secondEdge.end.y);
+                this.ctx.stroke();
+            }
+            
+            // Временное ребро, если пользователь рисует его
+            if (this.tempEdgeStart && this.tempEdgeEnd) {
+                this.ctx.strokeStyle = '#888';
+                this.ctx.lineWidth = 2;
+                this.ctx.setLineDash([5,5]);
+                this.ctx.beginPath();
+                this.ctx.moveTo(this.tempEdgeStart.x, this.tempEdgeStart.y);
+                this.ctx.lineTo(this.tempEdgeEnd.x, this.tempEdgeEnd.y);
+                this.ctx.stroke();
+                this.ctx.setLineDash([]);
+            }
+            
+            // Точка пересечения
+            if (this.intersectionPoint) {
+                this.ctx.fillStyle = '#800080'; // purple
+                this.ctx.beginPath();
+                this.ctx.arc(this.intersectionPoint.x, this.intersectionPoint.y, 6, 0, Math.PI * 2);
+                this.ctx.fill();
+                
+                this.ctx.fillStyle = '#000';
+                this.ctx.font = '12px Arial';
+                const tx = Math.round(this.intersectionPoint.x);
+                const ty = Math.round(this.intersectionPoint.y);
+                this.ctx.fillText(`(${tx}, ${ty})`, this.intersectionPoint.x + 8, this.intersectionPoint.y - 8);
+            }
+        }
+        
         if (this.testPoint) {
             this.ctx.fillStyle = '#FF0000';
             this.ctx.beginPath();
@@ -485,13 +680,16 @@ class PolygonApp {
         const checkBtn = document.getElementById('checkPoint');
         const edgeBtn = document.getElementById('checkEdge');
         const selectBtn = document.getElementById('selectPolygon');
+        const intersectBtn = document.getElementById('edgeIntersect');
         
-        checkBtn.style.background = this.checkMode ? '#B784A7' : 'transparent';
-        checkBtn.style.color = this.checkMode ? 'white' : '#B784A7';
-        edgeBtn.style.background = this.edgeCheckMode ? '#B784A7' : 'transparent';
-        edgeBtn.style.color = this.edgeCheckMode ? 'white' : '#B784A7';
-        selectBtn.style.background = this.selectMode ? '#4ECDC4' : 'transparent';
-        selectBtn.style.color = this.selectMode ? 'white' : '#4ECDC4';
+        checkBtn && (checkBtn.style.background = this.checkMode ? '#B784A7' : 'transparent');
+        checkBtn && (checkBtn.style.color = this.checkMode ? 'white' : '#B784A7');
+        edgeBtn && (edgeBtn.style.background = this.edgeCheckMode ? '#B784A7' : 'transparent');
+        edgeBtn && (edgeBtn.style.color = this.edgeCheckMode ? 'white' : '#B784A7');
+        selectBtn && (selectBtn.style.background = this.selectMode ? '#4ECDC4' : 'transparent');
+        selectBtn && (selectBtn.style.color = this.selectMode ? 'white' : '#4ECDC4');
+        intersectBtn && (intersectBtn.style.background = this.edgeIntersectMode ? '#6A5ACD' : 'transparent');
+        intersectBtn && (intersectBtn.style.color = this.edgeIntersectMode ? 'white' : '#6A5ACD');
     }
 }
 
